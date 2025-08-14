@@ -1,7 +1,7 @@
 # ==============================================================================
 # ChangeLog
 # ==============================================================================
-# - **[2025-08-15]** FINALE VERSION 2.9:
+# - **[2025-08-15]** FINALE VERSION 2.9.1:
 #   - IMPROVED: Anzeige der Distanz auf der Detailseite jetzt in cm mit 1 Nachkommastelle (Rohwert).
 #   - IMPROVED: Statistik für Verbrauch und Zuwachs wird nun alle 2 Minuten geglättet aktualisiert.
 #   - FIX: Kleinere Korrekturen und Optimierungen im Code.
