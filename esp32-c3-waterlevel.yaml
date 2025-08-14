@@ -1,0 +1,1053 @@
+# ==============================================================================
+# ChangeLog
+# ==============================================================================
+# - **[2025-08-15]** FINALE VERSION 2.9:
+#   - IMPROVED: Anzeige der Distanz auf der Detailseite jetzt in cm mit 1 Nachkommastelle (Rohwert).
+#   - IMPROVED: Statistik für Verbrauch und Zuwachs wird nun alle 2 Minuten geglättet aktualisiert.
+#   - FIX: Kleinere Korrekturen und Optimierungen im Code.
+# - **[2025-08-14]** FINALE VERSION 2.8:
+#   - NEW: Einheitliches Farbschema mit Blau- und Grüntönen für alle Displayseiten umgesetzt.
+#   - IMPROVED: Kommentare und Seitenstruktur im LVGL-Bereich für bessere Übersicht ergänzt.
+#   - FIX: Kleinere Layout- und Lesbarkeitsoptimierungen.
+# - **[2025-08-13]** FINALE VERSION 2.7:
+#   - FIX: Display-Timeout-Logik wurde korrigiert - bleibt nun zuverlässig während Alarms aktiv und resettet korrekt nach Alarmende
+#   - IMPROVED: Blink-Logik für Alarmseite mit Zustandsverwaltung (kein Flackern mehr)
+#   - NEW: Touch-Handler für Alarmseite ermöglicht manuelles Verlassen durch Berührung
+#   - CHANGED: Alarmseiten-Logik wurde von Seite 4 auf Seite 5 verschoben für bessere Konsistenz
+# - **[2025-08-12]** FINALE VERSION 2.5: Dynamische Aktualisierung der Verbrauchswerte (m³) und Systeminformationen (Uptime, RSSI) auf den entsprechenden LVGL-Seiten über ein 10-Sekunden-Intervall. Das Layout der Systemseite wurde für eine bessere Lesbarkeit in zwei Spalten (links/rechts) aufgeteilt.
+# - **[2025-08-11]** FINALE VERSION 2.4: Die LVGL-Layouts für die Seiten 'Verbrauch & Zuwachs' und 'Systeminformationen' wurden geändert. Titel sind jetzt zentriert, und die Werte sind links und rechts ausgerichtet.
+# - **[2025-08-11]** FINALE VERSION 2.3: Bestätigung, dass die Statusanzeige aus der Hauptansicht (ARC) entfernt und in die detaillierte Messwertseite verschoben wurde.
+# - **[2025-08-11]** FINALE VERSION 2.2: Die Statusanzeige (KRITISCH, NIEDRIG, NORMAL) wurde aus der Hauptansicht (ARC) entfernt. Die Anzeige der detaillierten Messwerte bleibt erhalten.
+# - **[2025-08-11]** FINALE VERSION 2.1: Umrechnung der wöchentlichen und monatlichen Verbrauchs- und Zuwachswerte in Kubikmeter (m³) für eine bessere Lesbarkeit. Die täglichen Werte bleiben in Litern (L).
+# - **[2025-08-11]** FINALE VERSION 2.0: Der Blinkeffekt auf der Alarmseite wurde vom Text "WASSERSTAND KRITISCH!" auf den Titel "!!! WARNUNG !!!" verschoben.
+# ==============================================================================
+
+substitutions:
+  code_version: "V2.9"
+
+esphome:
+  name: esp32-zisterne-display
+  platformio_options:
+    upload_speed: 921600
+    board_build.flash_mode: dio
+    board_build.f_flash: 80000000L
+    board_build.f_cpu: 240000000L
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: "y"
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: y
+      CONFIG_SPIRAM_RODATA: y
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  baud_rate: 9600
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api-zisterne
+
+ota:
+  - platform: esphome
+    password: !secret ota-zisterne
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Esp-S3-Zisterne Fallback Hotspot"
+    password: !secret wifi_fallback
+  power_save_mode: light
+  fast_connect: true
+
+web_server:
+  
+
+captive_portal:
+
+globals:
+  # Zisternen-Konfiguration
+  - id: g_total_height
+    type: float
+    initial_value: "1.40"
+  - id: g_blind_zone
+    type: float
+    initial_value: "0.20"
+  - id: g_tank_capacity
+    type: float
+    initial_value: "1500"
+  
+  # Display-Konfiguration
+  - id: g_display_page
+    type: int
+    initial_value: "0"
+  - id: g_last_activity_timestamp
+    type: float
+    initial_value: "0.0"
+  - id: g_display_timeout
+    type: int
+    initial_value: "300"
+  
+  # Alarm-Konfiguration
+  - id: g_alarm_threshold
+    type: float
+    initial_value: "10.0"
+  - id: g_warning_threshold
+    type: float
+    initial_value: "20.0"
+  
+  # Verbrauchszähler
+  - id: g_daily_consumption
+    type: float
+    initial_value: "0.0"
+    restore_value: true
+  - id: g_weekly_consumption
+    type: float
+    initial_value: "0.0"
+    restore_value: true
+  - id: g_monthly_consumption
+    type: float
+    initial_value: "0.0"
+    restore_value: true
+  - id: g_daily_gain
+    type: float
+    initial_value: "0.0"
+    restore_value: true
+  - id: g_weekly_gain
+    type: float
+    initial_value: "0.0"
+    restore_value: true
+  - id: g_monthly_gain
+    type: float
+    initial_value: "0.0"
+    restore_value: true
+  
+  - id: g_last_volume
+    type: float
+    initial_value: "0.0"
+    restore_value: true
+  
+  - id: g_last_avg_volume
+    type: float
+    initial_value: "0.0"
+    restore_value: true
+
+  - id: format_uptime
+    type: std::function<std::string(long)>
+    initial_value: '[](long secs) -> std::string {
+      long weeks = secs / 604800;
+      secs = secs % 604800;
+      long days = secs / 86400;
+      secs = secs % 86400;
+      long hours = secs / 3600;
+      secs = secs % 3600;
+      long mins = secs / 60;
+      long remaining_secs = secs % 60;
+      
+      std::string result = "";
+      if (weeks > 0) result += std::to_string(weeks) + "w ";
+      if (days > 0) result += std::to_string(days) + "d ";
+      if (hours > 0) result += std::to_string(hours) + "h ";
+      if (mins > 0) result += std::to_string(mins) + "m ";
+      result += std::to_string(remaining_secs) + "s";
+      return result;
+    }'
+
+uart:
+  id: uart_bus
+  tx_pin: GPIO17
+  rx_pin: GPIO18
+  baud_rate: 9600
+
+font:
+  - file: "gfonts://Roboto"
+    size: 24
+    id: display_font
+    glyphs:
+      - ' '
+      - '0123456789.:%&!'
+      - 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+      - 'abcdefghijklmnopqrstuvwxyz'
+      - 'ÄÖÜäöüß²³€'
+      - '()[]<>{}/-\_`"'
+
+sensor:
+  - platform: a02yyuw
+    uart_id: uart_bus
+    name: "Zisternen-Distanz (Raw)"
+    id: a02yyuw_distance_raw
+    unit_of_measurement: "mm"
+    internal: true
+    on_value:
+      then:
+        - lambda: |-
+            if (!isnan(x) && x > 0) {
+              // Rohwert in cm mit 1 Nachkommastelle anzeigen
+              char buffer[32];
+              sprintf(buffer, "Distanz: %.1f cm", x / 10.0f);
+              lv_label_set_text(id(label_detail_distance), buffer);
+            }
+
+  - platform: template
+    name: "Zisternen-Distanz"
+    id: cistern_distance_filtered
+    unit_of_measurement: "m"
+    icon: "mdi:ruler"
+    accuracy_decimals: 2
+    update_interval: 10s
+    filters:
+      - sliding_window_moving_average:
+          window_size: 3
+          send_every: 1
+    lambda: |-
+      if (isnan(id(a02yyuw_distance_raw).state)) {
+        ESP_LOGW("sensor", "Sensor-Ausfall erkannt");
+        lv_label_set_text(id(label_detail_status), "Keine Daten");
+        lv_obj_set_style_text_color(id(label_detail_status), lv_color_hex(0xFF0000), LV_PART_MAIN);
+        return {};
+      }
+      float calculated_distance = id(a02yyuw_distance_raw).state / 1000.0;
+      ESP_LOGI("sensor", "Berechneter Abstand: %.3f m", calculated_distance);
+      return calculated_distance;
+
+  - platform: template
+    name: "Zisternen-Füllstand"
+    id: cistern_percentage_sensor
+    unit_of_measurement: "%"
+    icon: "mdi:water-percent"
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      if (isnan(id(cistern_distance_filtered).state)) return {};
+      
+      float distance_m = id(cistern_distance_filtered).state;
+      float level_m = id(g_total_height) - distance_m;
+      float max_level = id(g_total_height) - id(g_blind_zone);
+      
+      if (max_level <= 0.0) {
+        ESP_LOGW("sensor", "Ungültige Zisternen-Konfiguration");
+        return 0.0;
+      }
+      
+      float percentage = (level_m / max_level) * 100.0;
+      return max(0.0f, min(100.0f, percentage));
+    on_value:
+      then:
+        - lambda: |-
+            if (!isnan(x)) {
+              lv_arc_set_value(id(gauge_fill_level), (int32_t)x);
+              
+              char buffer[32];
+              sprintf(buffer, "%d%%", (int)x);
+              lv_label_set_text(id(label_percentage), buffer);
+              sprintf(buffer, "Füllstand: %d%%", (int)x);
+              lv_label_set_text(id(label_detail_percentage), buffer);
+              
+              if (x <= id(g_alarm_threshold)) {
+                lv_label_set_text(id(label_detail_status), "Status KRITISCH");
+                lv_obj_set_style_text_color(id(label_detail_status), lv_color_hex(0xFF0000), LV_PART_MAIN);
+              } else if (x <= id(g_warning_threshold)) {
+                lv_label_set_text(id(label_detail_status), "Status NIEDRIG");
+                lv_obj_set_style_text_color(id(label_detail_status), lv_color_hex(0xFFFF00), LV_PART_MAIN);
+              } else {
+                lv_label_set_text(id(label_detail_status), "Status NORMAL");
+                lv_obj_set_style_text_color(id(label_detail_status), lv_color_hex(0x00FF00), LV_PART_MAIN);
+              }
+            }
+
+  - platform: template
+    name: "Zisternen-Füllhöhe"
+    id: level
+    unit_of_measurement: "cm"
+    icon: "mdi:water-boiler"
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      if (isnan(id(cistern_distance_filtered).state)) return {};
+      
+      float distance_m = id(cistern_distance_filtered).state;
+      float height_cm = (id(g_total_height) - distance_m) * 100;
+      return max(0.0f, height_cm);
+    on_value:
+      then:
+        - lambda: |-
+            if (!isnan(x)) {
+              char buffer[32];
+              sprintf(buffer, "Höhe: %d cm", (int)x);
+              lv_label_set_text(id(label_detail_height), buffer);
+              
+              // ÄNDERN: Distanz in cm mit 1 Nachkommastelle
+              sprintf(buffer, "Distanz: %.1f cm", id(cistern_distance_filtered).state * 100.0f);
+              lv_label_set_text(id(label_detail_distance), buffer);
+            }
+
+  - platform: template
+    name: "Zisternen-Volumen"
+    id: volume
+    unit_of_measurement: "L"
+    icon: "mdi:water"
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      if (isnan(id(cistern_distance_filtered).state)) return {};
+      
+      float distance_m = id(cistern_distance_filtered).state;
+      float level_m = id(g_total_height) - distance_m;
+      float max_level = id(g_total_height) - id(g_blind_zone);
+      
+      if (max_level <= 0.0) return 0.0;
+      
+      float volume_l = (level_m / max_level) * id(g_tank_capacity);
+      return max(0.0f, volume_l);
+    on_value:
+      then:
+        - lambda: |-
+            if (!isnan(x)) {
+              char buffer[32];
+              sprintf(buffer, "Volumen: %d L", (int)x);
+              lv_label_set_text(id(label_detail_volume), buffer);
+              
+              sprintf(buffer, "%d L", (int)x);
+              lv_label_set_text(id(label_volume_in_arc), buffer);
+              
+              // Nur noch für Anzeige, keine Statistikberechnung mehr!
+              id(g_last_volume) = x;
+            }
+
+  - platform: template
+    id: volume_change_consumption
+    internal: true
+    unit_of_measurement: "L"
+    accuracy_decimals: 1
+    update_interval: 10s
+
+  - platform: template
+    id: volume_change_gain
+    internal: true
+    unit_of_measurement: "L"
+    accuracy_decimals: 1
+    update_interval: 10s
+
+  - platform: template
+    name: "Tagesverbrauch Zisterne"
+    id: daily_consumption
+    unit_of_measurement: "L"
+    icon: "mdi:water-minus-outline"
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: 'return id(g_daily_consumption);'
+
+  - platform: template
+    name: "Wochenverbrauch Zisterne"
+    id: weekly_consumption
+    unit_of_measurement: "L"
+    icon: "mdi:water-minus-outline"
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: 'return id(g_weekly_consumption);'
+
+  - platform: template
+    name: "Monatsverbrauch Zisterne"
+    id: monthly_consumption
+    unit_of_measurement: "L"
+    icon: "mdi:water-minus-outline"
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: 'return id(g_monthly_consumption);'
+
+  - platform: template
+    name: "Tageszuwachs Zisterne"
+    id: daily_gain
+    unit_of_measurement: "L"
+    icon: "mdi:water-plus-outline"
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: 'return id(g_daily_gain);'
+
+  - platform: template
+    name: "Wochenzuwachs Zisterne"
+    id: weekly_gain
+    unit_of_measurement: "L"
+    icon: "mdi:water-plus-outline"
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: 'return id(g_weekly_gain);'
+
+  - platform: template
+    name: "Monatszuwachs Zisterne"
+    id: monthly_gain
+    unit_of_measurement: "L"
+    icon: "mdi:water-plus-outline"
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: 'return id(g_monthly_gain);'
+    
+  - platform: uptime
+    name: "Uptime Sensor"
+    id: uptime_sensor
+    internal: true
+    on_value:
+      then:
+        - lambda: |-
+            char buffer[48];
+            std::string uptime_str = id(format_uptime)((long)x);
+            sprintf(buffer, "Uptime: %s", uptime_str.c_str());
+            lv_label_set_text(id(label_system_info_uptime), buffer);
+
+  - platform: wifi_signal
+    name: "WiFi Signal Sensor"
+    id: wifi_signal_sensor
+    internal: true
+    on_value:
+      then:
+        - lambda: |-
+            char buffer[32];
+            sprintf(buffer, "RSSI: %.0f dBm", x);
+            lv_label_set_text(id(label_system_info_rssi), buffer);
+
+button:
+  - platform: template
+    name: "Zähler Heute zurücksetzen"
+    icon: "mdi:calendar-today"
+    on_press:
+      then:
+        - globals.set: { id: g_daily_consumption, value: "0.0" }
+        - globals.set: { id: g_daily_gain, value: "0.0" }
+        - logger.log: "Tageszähler manuell zurückgesetzt."
+  
+  - platform: template
+    name: "Zähler Woche zurücksetzen"
+    icon: "mdi:calendar-week"
+    on_press:
+      then:
+        - globals.set: { id: g_weekly_consumption, value: "0.0" }
+        - globals.set: { id: g_weekly_gain, value: "0.0" }
+        - logger.log: "Wochenzähler manuell zurückgesetzt."
+  
+  - platform: template
+    name: "Zähler Monat zurücksetzen"
+    icon: "mdi:calendar-month"
+    on_press:
+      then:
+        - globals.set: { id: g_monthly_consumption, value: "0.0" }
+        - globals.set: { id: g_monthly_gain, value: "0.0" }
+        - logger.log: "Monatszähler manuell zurückgesetzt."
+  
+  - platform: template
+    name: "Alle Zähler zurücksetzen"
+    icon: "mdi:restore"
+    on_press:
+      then:
+        - globals.set: { id: g_daily_consumption, value: "0.0" }
+        - globals.set: { id: g_daily_gain, value: "0.0" }
+        - globals.set: { id: g_weekly_consumption, value: "0.0" }
+        - globals.set: { id: g_weekly_gain, value: "0.0" }
+        - globals.set: { id: g_monthly_consumption, value: "0.0" }
+        - globals.set: { id: g_monthly_gain, value: "0.0" }
+        - logger.log: "Alle Zähler manuell zurückgesetzt."
+
+text_sensor:
+  - platform: version
+    name: "ESPHome Version"
+    id: esphome_version
+    hide_timestamp: true
+    on_value:
+      then:
+        - lambda: |-
+            lv_label_set_text(id(systemversion), id(esphome_version).state.c_str());
+
+binary_sensor:
+  - platform: template
+    name: "Zisterne Warnung Niedrig"
+    id: cistern_warning
+    device_class: problem
+    icon: "mdi:alert"
+    lambda: |-
+      return id(cistern_percentage_sensor).state < id(g_warning_threshold);
+
+  - platform: template
+    name: "Zisternenalarm Wasserstand"
+    id: cistern_alarm
+    device_class: problem
+    icon: "mdi:alert-circle"
+    lambda: |-
+      return id(cistern_percentage_sensor).state < id(g_alarm_threshold);
+    on_state:
+      then:
+        - light.turn_on: my_backlight
+        - lambda: |-
+            if (id(cistern_alarm).state) {
+              ESP_LOGW("alarm", "KRITISCHER WASSERSTAND: %.1f%%", id(cistern_percentage_sensor).state);
+              id(g_display_page) = 4;
+              lv_scr_load(id(page_alarm)->obj);
+              
+              char buffer[32];
+              sprintf(buffer, "Füllstand: %d%%", (int)id(cistern_percentage_sensor).state);
+              lv_label_set_text(id(label_alarm_percentage), buffer);
+            } else {
+              ESP_LOGI("alarm", "Wasserstand wieder normal: %.1f%%", id(cistern_percentage_sensor).state);
+              id(g_display_page) = 0;
+              lv_scr_load(id(page_level_bar)->obj);
+            }
+
+  - platform: touchscreen
+    name: "Touchscreen Press"
+    id: touch_pressed
+    touchscreen_id: my_touch
+    x_min: 0
+    x_max: 461
+    y_min: 0
+    y_max: 310
+
+time:
+  - platform: sntp
+    id: sntp_time
+    on_time:
+      - cron: "0 0 0 * * *"
+        then:
+          - globals.set: { id: g_daily_consumption, value: "0.0" }
+          - globals.set: { id: g_daily_gain, value: "0.0" }
+          - logger.log: "Tageszähler zurückgesetzt."
+      
+      - cron: "0 0 0 * * MON"
+        then:
+          - globals.set: { id: g_weekly_consumption, value: "0.0" }
+          - globals.set: { id: g_weekly_gain, value: "0.0" }
+          - logger.log: "Wochenzähler zurückgesetzt."
+      
+      - cron: "0 0 0 1 * *"
+        then:
+          - globals.set: { id: g_monthly_consumption, value: "0.0" }
+          - globals.set: { id: g_monthly_gain, value: "0.0" }
+          - logger.log: "Monatszähler zurückgesetzt."
+      
+      - seconds: /5
+        then:
+          - if:
+              condition:
+                lambda: |-
+                  float current_time = id(sntp_time).now().timestamp;
+                  float last_activity = id(g_last_activity_timestamp);
+                  return (current_time - last_activity) > id(g_display_timeout);
+              then:
+                - if:
+                    condition:
+                      lambda: 'return id(cistern_alarm).state;'
+                    then:
+                      - logger.log: "Alarm aktiv - Display bleibt an"
+                    else:
+                      - light.turn_off: my_backlight
+                      - globals.set:
+                          id: g_display_page
+                          value: "0"
+                      - lambda: |-
+                          lv_scr_load(id(page_level_bar)->obj);
+
+spi:
+  id: display_qspi
+  type: quad
+  clk_pin: 47
+  data_pins: [21, 48, 40, 39]
+
+i2c:
+  sda: 4
+  scl: 8
+  id: touchscreen_bus
+
+display:
+  - platform: qspi_dbi
+    model: axs15231
+    data_rate: 40MHz
+    id: my_display
+    spi_id: display_qspi
+    dimensions:
+      height: 480
+      width: 320
+    cs_pin: 45
+    rotation: 90
+    auto_clear_enabled: false
+
+output:
+  - platform: ledc
+    pin: GPIO1
+    id: backlight
+
+light:
+  - platform: monochromatic
+    output: backlight
+    name: "backlight Light"
+    id: my_backlight
+    restore_mode: ALWAYS_ON
+
+touchscreen:
+  - platform: axs15231
+    id: my_touch
+    display: my_display
+    i2c_id: touchscreen_bus
+    calibration:
+      x_min: 0
+      x_max: 461
+      y_min: 0
+      y_max: 310
+    transform:
+      swap_xy: true
+      mirror_y: true
+    on_touch:
+      then:
+        - globals.set:
+            id: g_last_activity_timestamp
+            value: !lambda 'return id(sntp_time).now().timestamp;'
+        - if:
+            condition:
+              lambda: 'return !id(my_backlight).current_values.is_on();'
+            then:
+              - light.turn_on: my_backlight
+              - globals.set:
+                  id: g_display_page
+                  value: "0"
+              - lambda: |-
+                  lv_scr_load(id(page_level_bar)->obj);
+            else:
+              - if:
+                  condition:
+                    lambda: 'return id(cistern_alarm).state;'
+                  then:
+                    - globals.set:
+                        id: g_display_page
+                        value: "0"
+                    - lambda: |-
+                        lv_scr_load(id(page_level_bar)->obj);
+                  else:
+                    - lambda: |-
+                        id(g_display_page) = (id(g_display_page) + 1) % 4;
+                        if (id(g_display_page) == 0) {
+                          lv_scr_load(id(page_level_bar)->obj);
+                        } else if (id(g_display_page) == 1) {
+                          lv_scr_load(id(page_detailed_values)->obj);
+                        } else if (id(g_display_page) == 2) {
+                          lv_scr_load(id(page_consumption)->obj);
+                        } else if (id(g_display_page) == 3) {
+                          lv_scr_load(id(page_system_info)->obj);
+                        }
+
+lvgl:
+  id: lvgl_display
+  draw_rounding: 8
+  displays: my_display
+  touchscreens: my_touch
+  bg_color: 0x002244
+  border_width: 0
+  outline_width: 0
+  theme:
+    obj:
+      bg_color: 0x002244
+  pages:
+    # --- Hauptseite: Füllstand ---
+    - id: page_level_bar
+      widgets:
+        - label:
+            id: label_title_level
+            align: TOP_MID
+            y: 5
+            text_font: display_font
+            text: "Zisternen-Füllstand"
+            text_color: 0x00FFFF   # Türkis
+        - obj:
+            align: TOP_MID
+            y: 50
+            height: 250
+            width: 460
+            bg_color: 0x003322    # Dunkelgrün
+            border_color: 0x00FFFF
+            border_width: 2
+            radius: 10
+            widgets:
+              - arc:
+                  id: gauge_fill_level
+                  align: CENTER
+                  y: 15
+                  height: 190
+                  width: 190
+                  arc_width: 20
+                  arc_color: 0x89CFF0   # Hellblau
+                  arc_rounded: true
+                  border_color: 0x003322
+                  border_width: 0
+                  value: 50
+                  indicator:
+                    width: 40
+                    arc_width: 20
+                    arc_color: 0x0000FF # Dunkelblau
+                  knob:
+                    radius: 5
+              - label:
+                  id: label_percentage
+                  align: CENTER
+                  y: 0
+                  text_font: display_font
+                  text: "xx %"
+                  text_color: 0x00FF00   # Grün
+              - label:
+                  id: label_volume_in_arc
+                  align: CENTER
+                  y: 40
+                  text_font: display_font
+                  text: "0 L"
+                  text_color: 0xFFFFFF   # Weiß
+
+    # --- Seite 2: Detaillierte Messwerte ---
+    - id: page_detailed_values
+      widgets:
+        - label:
+            id: label_title_details
+            align: TOP_MID
+            y: 20
+            text_font: display_font
+            text: "Detaillierte Messwerte"
+            text_color: 0x00FFFF
+        - obj:
+            align: TOP_MID
+            y: 60
+            height: 240
+            width: 460
+            bg_color: 0x1a1a1a
+            border_color: 0x333333
+            border_width: 2
+            radius: 10
+            widgets:
+              - label:
+                  id: label_detail_percentage
+                  align: TOP_MID
+                  x: 0
+                  y: 15
+                  text_font: display_font
+                  text: "Füllstand: 0%"
+                  text_color: 0x00FF00
+              - label:
+                  id: label_detail_status
+                  align: TOP_MID
+                  x: 0
+                  y: 55
+                  text_font: display_font
+                  text: "Status unbekannt"
+                  text_color: 0x00FF00
+              - label:
+                  id: label_detail_height
+                  align: TOP_MID
+                  x: 0
+                  y: 95
+                  text_font: display_font
+                  text: "Höhe: 0 cm"
+                  text_color: 0x00FF00
+              - label:
+                  id: label_detail_volume
+                  align: TOP_MID
+                  x: 0
+                  y: 135
+                  text_font: display_font
+                  text_align: LEFT
+                  text: "Volumen: 0 L"
+                  text_color: 0x00FF00
+              - label:
+                  id: label_detail_distance
+                  align: TOP_MID
+                  x: 0
+                  y: 175
+                  text_font: display_font
+                  text_align: LEFT
+                  text: "Distanz: 00.0 cm"
+                  text_color: 0x00FF00
+
+    # --- Seite 3: Verbrauch & Zuwachs ---
+    - id: page_consumption
+      widgets:
+        - label:
+            height: 30
+            id: label_title_consumption
+            align: TOP_MID
+            y: 5
+            text_font: display_font
+            text: "Verbrauch & Zuwachs"
+            text_color: 0x00FFFF
+        - obj:
+            id: daily_container
+            align: TOP_MID
+            x: 0
+            y: 40
+            height: 80
+            width: 440
+            bg_color: 0x1a1a1a
+            border_color: 0x333333
+            border_width: 2
+            radius: 10
+            widgets:
+              - label:
+                  align: CENTER
+                  y: -25
+                  text_font: display_font
+                  text: "Heute"
+                  text_color: 0xFFFF00
+              - label:
+                  id: label_daily_consumption
+                  align: RIGHT_MID
+                  x: -10
+                  y: 10
+                  text_font: display_font
+                  text: "Verbrauch: 0 L"
+                  text_color: 0xFF6666
+              - label:
+                  id: label_daily_gain
+                  align: LEFT_MID
+                  x: 5
+                  y: 10
+                  text_font: display_font
+                  text: "Regen: 0 L"
+                  text_color: 0x66FF66
+        - obj:
+            id: weekly_container
+            align: TOP_MID
+            x: 0
+            y: 130
+            height: 80
+            width: 440
+            bg_color: 0x1a1a1a
+            border_color: 0x333333
+            border_width: 2
+            radius: 10
+            widgets:
+              - label:
+                  align: CENTER
+                  y: -25
+                  text_font: display_font
+                  text: "Diese Woche"
+                  text_color: 0xFFFF00
+              - label:
+                  id: label_weekly_consumption
+                  align: RIGHT_MID
+                  x: -10
+                  y: 10
+                  text_font: display_font
+                  text: "Verbrauch: 0.00 m³"
+                  text_color: 0xFF6666
+              - label:
+                  id: label_weekly_gain
+                  align: LEFT_MID
+                  x: 5
+                  y: 10
+                  text_font: display_font
+                  text: "Regen: 0.00 m³"
+                  text_color: 0x66FF66
+        - obj:
+            id: monthly_container
+            align: TOP_MID
+            x: 0
+            y: 220
+            height: 80
+            width: 440
+            bg_color: 0x1a1a1a
+            border_color: 0x333333
+            border_width: 2
+            radius: 10
+            widgets:
+              - label:
+                  align: CENTER
+                  y: -25
+                  text_font: display_font
+                  text: "Dieser Monat"
+                  text_color: 0xFFFF00
+              - label:
+                  id: label_monthly_consumption
+                  align: RIGHT_MID
+                  x: -10
+                  y: 10
+                  text_font: display_font
+                  text: "Verbrauch: 0.00 m³"
+                  text_color: 0xFF6666
+              - label:
+                  id: label_monthly_gain
+                  align: LEFT_MID
+                  x: 5
+                  y: 10
+                  text_font: display_font
+                  text: "Regen: 0.00 m³"
+                  text_color: 0x66FF66
+
+    # --- Seite 4: Systeminformationen ---
+    - id: page_system_info
+      widgets:
+        - label:
+            id: label_title_system
+            align: TOP_MID
+            y: 5
+            text_font: display_font
+            text: "Systeminformationen"
+            text_color: 0x00FFFF
+        - obj:
+            align: TOP_MID
+            y: 45
+            height: 100
+            width: 440
+            bg_color: 0x1a1a1a
+            border_color: 0x333333
+            border_width: 2
+            radius: 10
+            widgets:
+              - label:
+                  id: label_system_info_uptime
+                  align: TOP_LEFT
+                  x: 15
+                  y: 05
+                  text_align: LEFT
+                  text_font: display_font
+                  text: "Uptime: Wird geladen..."
+                  text_color: 0x00FF00
+              - label:
+                  id: label_system_info_rssi
+                  align: TOP_LEFT
+                  x: 15
+                  y: 40
+                  text_align: LEFT
+                  text_font: display_font
+                  text: "RSSI: Wird geladen..."
+                  text_color: 0x00FF00
+        - obj:
+            align: TOP_MID
+            y: 160
+            height: 150
+            width: 440
+            bg_color: 0x1a1a1a
+            border_color: 0x333333
+            border_width: 2
+            radius: 10
+            widgets:
+              - label:
+                  align: CENTER
+                  x: 0
+                  y: -40
+                  text_font: display_font
+                  text: "ESPHome Version:"
+                  text_color: 0x00FFFF
+              - label:
+                  id: systemversion
+                  align: CENTER
+                  x: 0
+                  y: 0
+                  text_font: display_font
+                  text: "Wird geladen..."
+                  text_color: 0x00FF00
+              - label:
+                  id: label_code_version
+                  align: CENTER
+                  x: 0
+                  y: 40
+                  text_font: display_font
+                  text: ${code_version}
+                  text_color: 0x00FF00
+
+    # --- Seite 5: Alarmseite ---
+    - id: page_alarm
+      widgets:
+        - obj:
+            align: CENTER
+            height: 280
+            width: 440
+            bg_color: 0x330000
+            border_color: 0xFF0000
+            border_width: 4
+            radius: 15
+            widgets:
+              - label:
+                  id: label_alarm_title
+                  align: TOP_MID
+                  y: 30
+                  text_font: display_font
+                  text: "!!! WARNUNG !!!"
+                  text_color: 0xFF0000
+              - label:
+                  id: label_alarm_text
+                  align: CENTER
+                  text_align: CENTER
+                  text_font: display_font
+                  text: "WASSERSTAND\nKRITISCH!"
+                  text_color: 0xFF0000
+              - label:
+                  id: label_alarm_percentage
+                  align: CENTER
+                  y: 100
+                  text_font: display_font
+                  text: "Füllstand: 0%"
+                  text_color: 0xFF0000
+
+# Intervall-Updates für Textanzeigen
+interval:
+  - interval: 10s
+    then:
+      - lambda: |-
+          char buffer[64];
+          sprintf(buffer, "Verbrauch: %d L", (int)id(daily_consumption).state);
+          lv_label_set_text(id(label_daily_consumption), buffer);
+          sprintf(buffer, "Regen: %d L", (int)id(daily_gain).state);
+          lv_label_set_text(id(label_daily_gain), buffer);
+          
+          float weekly_consumption_m3 = id(weekly_consumption).state / 1000.0;
+          sprintf(buffer, "Verbrauch: %.2f m³", weekly_consumption_m3);
+          lv_label_set_text(id(label_weekly_consumption), buffer);
+          float weekly_gain_m3 = id(weekly_gain).state / 1000.0;
+          sprintf(buffer, "Regen: %.2f m³", weekly_gain_m3);
+          lv_label_set_text(id(label_weekly_gain), buffer);
+          
+          float monthly_consumption_m3 = id(monthly_consumption).state / 1000.0;
+          sprintf(buffer, "Verbrauch: %.2f m³", monthly_consumption_m3);
+          lv_label_set_text(id(label_monthly_consumption), buffer);
+          float monthly_gain_m3 = id(monthly_gain).state / 1000.0;
+          sprintf(buffer, "Regen: %.2f m³", monthly_gain_m3);
+          lv_label_set_text(id(label_monthly_gain), buffer);
+
+  - interval: 2min
+    then:
+      - lambda: |-
+          float current_volume = id(volume).state;
+          float last_avg = id(g_last_avg_volume);
+          if (!isnan(current_volume) && last_avg > 0) {
+            float diff = current_volume - last_avg;
+            if (abs(diff) > 1.0) { // nur relevante Änderungen
+              if (diff < 0) {
+                float consumption = -diff;
+                id(g_daily_consumption) += consumption;
+                id(g_weekly_consumption) += consumption;
+                id(g_monthly_consumption) += consumption;
+                ESP_LOGI("volume", "Geglätteter Verbrauch: %.1f L", consumption);
+              } else {
+                float gain = diff;
+                id(g_daily_gain) += gain;
+                id(g_weekly_gain) += gain;
+                id(g_monthly_gain) += gain;
+                ESP_LOGI("volume", "Geglätteter Regen: %.1f L", gain);
+              }
+            }
+          }
+          id(g_last_avg_volume) = current_volume;
+
+  - interval: 500ms
+    then:
+      - if:
+          condition:
+            lambda: 'return id(g_display_page) == 4;'
+          then:
+            - lambda: |-
+                static bool visible = true;
+                if (visible) {
+                  lv_obj_add_flag(id(label_alarm_title), LV_OBJ_FLAG_HIDDEN);
+                } else {
+                  lv_obj_clear_flag(id(label_alarm_title), LV_OBJ_FLAG_HIDDEN);
+                }
+                visible = !visible;
