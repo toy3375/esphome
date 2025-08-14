@@ -1,0 +1,184 @@
+# ESPHome Konfiguration für ESP8266 D1 Mini Türklingel mit DFPlayer
+
+esphome:
+  name: esp-d1-tuerklingel-v2
+
+esp8266:
+  board: d1_mini
+
+# Logging aktivieren
+logger:
+
+substitutions:
+  board_platform: esp8266
+  board_type: nodemcu
+  devicename: v2-esptuerklingel
+  hostname: v2-esptuerklingel
+  buttonname: v2-esptuerklingel_button
+  devicestatusname: v2-esptuerklingel_status
+  defaultmp3file: "1"
+  buttonpin1: D4          # Klingelknopf
+  dooropenpin1: D3        # Türöffner
+  df_tx_pin: D1           # DFPlayer TX
+  df_rx_pin: D2           # DFPlayer RX
+
+ota:
+- platform: esphome
+  password: "8f40cdc8dd7bba82b3ac5f6c621da068"
+
+wifi:
+  networks:
+  - ssid: !secret wifi1_ssid
+    password: !secret wifi1_pw
+  - ssid: !secret wifi2_ssid
+    password: !secret wifi2_pw
+  # Fallback Hotspot bei Verbindungsproblemen
+  ap:
+    ssid: "Esp-Tuerklingel Fallback Hotspot"
+    password: !secret wifi_fallback
+
+captive_portal:
+
+web_server:
+
+status_led:
+  pin:
+    number: 16
+    inverted: false
+
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+
+# Tasten für DFPlayer Steuerung
+button:
+  - platform: template
+    name: $hostname play
+    on_press:
+      - logger.log: playbutton Pressed
+      - dfplayer.play:
+            file: $defaultmp3file
+  - platform: template
+    name: $hostname stop
+    on_press:
+      - logger.log: stopbutton Pressed
+      - dfplayer.stop
+  - platform: template
+    name: $hostname play loop
+    on_press:
+      - logger.log: playloop DFPlayer Pressed
+      - dfplayer.play:
+           file: "2"
+           loop: True
+  - platform: restart
+    name: $hostname restart          
+
+# Lautstärkeregler für DFPlayer
+number:
+  - platform: template
+    name: "Volume DFPlayer"
+    id: volume_dfplayer
+    optimistic: true
+    restore_value: yes
+    initial_value: 25
+    min_value: 1
+    max_value: 30
+    step: 1
+    mode: slider
+    on_value:
+      then:
+        - dfplayer.set_volume: !lambda "return x;"
+
+# Uptime Sensoren
+sensor:
+  - platform: uptime
+    name: $devicename Uptime Sensor
+    type: timestamp
+
+text_sensor:
+  - platform: template
+    name: $devicename Uptime Human Readable
+    id: uptime_human
+    icon: mdi:clock-start
+
+# Türöffner Schalter
+switch:
+  - platform: gpio
+    pin: 
+      inverted: True
+      number: D3
+    id: dooropen
+    name: $hostname tueroeffner
+    icon: "mdi:door"
+    on_turn_on:
+    - delay: 5000ms
+    - switch.turn_off: dooropen
+
+# Klingelknopf und Status
+binary_sensor:
+  - platform: status
+    name: $devicestatusname
+  - platform: gpio
+    pin:
+      number: $buttonpin1
+      mode: INPUT_PULLUP
+      inverted: True
+    name: $buttonname
+    on_press:
+      then:
+        - dfplayer.play:
+            file: $defaultmp3file
+        - logger.log: 'Tuerklingel betätigt'
+    filters:
+      - delayed_on: 50ms
+
+# UART für DFPlayer
+uart:
+  tx_pin: $df_tx_pin
+  rx_pin: $df_rx_pin
+  baud_rate: 9600
+
+# DFPlayer Mini Modul
+dfplayer:
+  on_finished_playback:
+    then:
+      logger.log: 'Soundfile Ende'
+      
+# Home Assistant API
+api:
+  encryption:
+    key: "vmtzowB2murcZ/h+G10zhViPMrDahunToKVWBTIbPFo="
+  services:
+    - service: dfplayer_play
+      variables:
+        file: int
+      then:
+        - dfplayer.play: !lambda 'return file;'
+    - service: dfplayer_play_loop
+      variables:
+        file: int
+        loop_: bool
+      then:
+        - dfplayer.play:
+            file: !lambda 'return file;'
+            loop: !lambda 'return loop_;'
+    - service: dfplayer_set_volume
+      variables:
+        volume: int
+      then:
+        - dfplayer.set_volume: !lambda 'return volume;'
+    - service: dfplayer_stop
+      then:
+        - dfplayer.stop
+    - service: dfplayer_sleep
+      then:
+      - dfplayer.sleep
+    - service: dfplayer_reset
+      then:
+      - dfplayer.reset
+    - service: dfplayer_start
+      then:
+      - dfplayer.start
+    - service: dfplayer_set_device_tf
+      then:
+        - dfplayer.set_device: TF_CARD
