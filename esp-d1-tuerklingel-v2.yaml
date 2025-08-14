@@ -1,4 +1,4 @@
-# ESPHome Konfiguration für ESP8266 D1 Mini Türklingel mit DFPlayer
+# ESPHome Konfiguration für ESP8266 D1 Mini Türklingel mit DFPlayer 08/2025
 
 esphome:
   name: esp-d1-tuerklingel-v2
