@@ -24,7 +24,7 @@ substitutions:
 
 ota:
 - platform: esphome
-  password: "8f40cdc8dd7bba82b3ac5f6c621da068"
+  password: !secret ota-tuerklingel
 
 wifi:
   networks:
