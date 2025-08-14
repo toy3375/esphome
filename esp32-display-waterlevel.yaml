@@ -23,7 +23,7 @@
 # ==============================================================================
 
 substitutions:
-  code_version: "V2.9"
+  code_version: "V2.9.1"
 
 esphome:
   name: esp32-zisterne-display
