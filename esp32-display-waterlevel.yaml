@@ -265,7 +265,7 @@ sensor:
             }
 
   - platform: template
-    name: "Zisternen-Füllhöhe"
+    name: "Zisternen-Höhe"
     id: level
     unit_of_measurement: "cm"
     icon: "mdi:water-boiler"
@@ -297,15 +297,16 @@ sensor:
     icon: "mdi:water"
     accuracy_decimals: 0
     update_interval: 10s
+    filters:
+      - sliding_window_moving_average:
+          window_size: 3
+          send_every: 1
     lambda: |-
       if (isnan(id(cistern_distance_filtered).state)) return {};
-      
       float distance_m = id(cistern_distance_filtered).state;
       float level_m = id(g_total_height) - distance_m;
       float max_level = id(g_total_height) - id(g_blind_zone);
-      
       if (max_level <= 0.0) return 0.0;
-      
       float volume_l = (level_m / max_level) * id(g_tank_capacity);
       return max(0.0f, volume_l);
     on_value:
@@ -315,10 +316,8 @@ sensor:
               char buffer[32];
               sprintf(buffer, "Volumen: %d L", (int)x);
               lv_label_set_text(id(label_detail_volume), buffer);
-              
               sprintf(buffer, "%d L", (int)x);
               lv_label_set_text(id(label_volume_in_arc), buffer);
-              
               // Nur noch für Anzeige, keine Statistikberechnung mehr!
               id(g_last_volume) = x;
             }
