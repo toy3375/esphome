@@ -140,6 +140,11 @@ globals:
     type: float
     initial_value: "0.0"
     restore_value: true
+  # Mindeständerung in Litern für Verbrauch/Zuwachs
+  - id: g_min_change_liters
+    type: float
+    initial_value: "3.0"
+    restore_value: true
 
   - id: format_uptime
     type: std::function<std::string(long)>
@@ -1016,9 +1021,10 @@ interval:
       - lambda: |-
           float current_volume = id(volume).state;
           float last_avg = id(g_last_avg_volume);
+          float min_change = id(g_min_change_liters);
           if (!isnan(current_volume) && last_avg > 0) {
             float diff = current_volume - last_avg;
-            if (abs(diff) > 1.0) { // nur relevante Änderungen
+            if (abs(diff) >= min_change) { // nur relevante Änderungen
               if (diff < 0) {
                 float consumption = -diff;
                 id(g_daily_consumption) += consumption;
